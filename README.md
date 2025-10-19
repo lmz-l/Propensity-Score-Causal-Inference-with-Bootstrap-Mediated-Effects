@@ -1,0 +1,1 @@
+This project demonstrates comprehensive causal inference methodologies applied to multiple datasets, featuring propensity score methods, precision variables, bootstrap inference, and mediation analysis.
