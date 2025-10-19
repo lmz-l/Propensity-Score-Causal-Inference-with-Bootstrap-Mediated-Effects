@@ -1,0 +1,373 @@
+---
+title: "Propensity Score Causal Inference with Bootstrap-Mediated Effects"
+author: "Mingzhe Liu"
+format: html
+editor: visual
+---
+
+# 1
+
+## 1
+
+```{r}
+brfss <- read.csv("~/brfss.csv")
+brfsslt65<-brfss[brfss$gt65==0,]
+plotprop.r<- function (data=brfsslt65,ids=c(1:nrow(brfsslt65)))
+{
+
+dat<-data[ids,]
+e<-fitted(glm(insured~rural+female+whitenh+blacknh+
+hisp+multinh+gthsedu,family=binomial,data=dat))
+a<-range(density(e[dat$insured==1])$y)
+b<-range(density(e[dat$insured==0])$y)
+a<-range(a,b)
+plot(c(0,1),a,type="n",xlab="propensity score", ylab="density")
+lines(density(e[dat$insured==1],bw=.05),lty=1)
+lines(density(e[dat$insured==0],bw=.05),lty=2)
+legend("topleft",c("insured=0","insured=1"),lty=c(2,1))
+}
+plotprop.r()
+```
+
+## 2
+
+```{r}
+estimate_effect <- function(data, ids=1:nrow(data)) {
+    
+    dat <- data[ids,]
+   
+    emod <- glm(insured ~ rural + female + whitenh + blacknh + hisp + multinh + gthsedu, 
+                family=binomial, data=dat)
+    e <- predict(emod, type="response")
+
+    lmod <- glm(flushot ~ insured + e, family=binomial, data=dat)
+
+    dat0 <- dat
+    dat1 <- dat
+    dat0$insured <- 0
+    dat1$insured <- 1
+    dat0$e <- e
+    dat1$e <- e
+
+    EYhat0 <- predict(lmod, newdata=dat0, type="response")
+    EYhat1 <- predict(lmod, newdata=dat1, type="response")
+
+    EY0 <- mean(EYhat0)
+    EY1 <- mean(EYhat1)
+
+    rd <- EY1 - EY0
+    logrr <- log(EY1/EY0)
+
+    return(c(EY0, EY1, rd, logrr))
+}
+
+estimate_effect(brfsslt65)
+```
+
+## 3
+
+```{r}
+estand.r<-function (data=brfsslt65,ids=1:nrow(brfsslt65))
+{
+dat<-data[ids,]
+emod<-glm(insured~rural+female+whitenh+blacknh+
+hisp+multinh+gthsedu,family=binomial,data=dat)
+e<-fitted(emod)
+lmod<-glm(flushot~insured+e,family=binomial,data=dat)
+dat0<-dat1<-dat
+dat0$insured<-0
+dat1$insured<-1
+dat0$e<-dat1$e<-e
+EYhat0<-predict(lmod,newdata=dat0,type="response")
+EYhat1<-predict(lmod,newdata=dat1,type="response")
+EY0<-mean(EYhat0)
+EY1<-mean(EYhat1)
+rd<-EY1-EY0
+logrr<-log(EY1/EY0)
+c(EY0,EY1,rd,logrr)
+}
+estand.r()
+```
+
+## 4
+
+```{r}
+prop.r <- function(data = brfsslt65)
+{
+
+out <-glm(insured~rural+female+whitenh+blacknh+
+hisp+multinh+gthsedu,
+family = binomial,
+data = data)
+
+list(e = fitted(out), emod = summary(out))
+}
+
+equartiles.r <- function(data = brfsslt65, ids = c(1:nrow(brfsslt65))) {
+    dat <- data[ids, ]
+
+    
+    eb <- prop.r(data)$e
+
+    dat$quartile <- cut(eb, breaks = quantile(eb, c(0, .25, .5, .75, 1)), include.lowest = TRUE)
+    
+    effects <- c()
+
+
+    for (q in levels(dat$quartile)) {
+       
+        subset_data <- dat[dat$quartile == q, ]
+        outcome_model <- glm(flushot ~ insured, data = subset_data, family = binomial())
+
+        effect <- coef(summary(outcome_model))["insured", "Estimate"]
+        effects <- c(effects, effect)
+    }
+
+   average_effect <- mean(effects)
+
+    return(c(quartile_effects = effects, average_effect = average_effect))
+}
+
+
+
+equartiles.r()
+```
+
+```{r}
+library(boot)
+bootstandatt_r <- function() {
+ 
+  stand.out <- boot(data = brfsslt65, statistic = equartiles.r, R = 10)
+
+  stand.est <- stand.out$t0
+  stand.SE <- apply(stand.out$t, 2, sd)
+
+  stand.lci <- stand.est - 1.96 * stand.SE
+  stand.uci <- stand.est + 1.96 * stand.SE
+
+  return(list(
+    stand.est = stand.est,
+    stand.SE = stand.SE,
+    stand.lci = stand.lci,
+    stand.uci = stand.uci
+  ))
+}
+
+bootstandatt_r()
+
+```
+
+quartile 2, 3 and 4 are close together
+
+## 5
+
+```{r}
+library(Matching)
+set.seed(123)  
+sample_size <- 100  
+brfsslt65_sample <- brfsslt65[sample(nrow(brfsslt65), sample_size), ]
+
+emod<-glm(insured~rural+female+whitenh+blacknh+hisp+multinh+gthsedu,family=binomial,data=brfsslt65_sample)
+e<-fitted(emod)
+
+match.r<-function ()
+{
+SEe<-sqrt(var(e))
+Match(Y=brfsslt65_sample$flushot,Tr=brfsslt65_sample$insured,X=e,
+estimand="ATE",caliper=0.25, replace=T,ties=F)
+}
+
+match.out<-match.r()
+matchsummary.r<-function ()
+{
+summary.Match(match.out)
+}
+
+matchbalance.r<-function ()
+{
+MatchBalance(flushot~insured+rural+female+whitenh+blacknh+
+hisp+multinh+gthsedu,data=brfsslt65,match.out=match.out)
+}
+
+matchsummary.r()
+matchbalance.r()
+
+```
+
+# 2
+
+```{r}
+library(MASS)
+data("bacteria")
+
+bact <- data.frame(ID = unique(bacteria$ID))
+
+calculate_proportion <- function(id, data) {
+  id_data <- subset(data, ID == id & week > 0)
+  mean(id_data$y == "y", na.rm = TRUE)
+}
+
+bact$proportion_y <- sapply(bact$ID, calculate_proportion, data = bacteria)
+
+trt_data <- subset(bacteria, week == 0, select = c(ID, trt))
+bact <- merge(bact, trt_data, by = "ID")
+
+baseline <- subset(bacteria, week == 0, select = c(ID, y))
+names(baseline)[names(baseline) == "y"] <- "y0"
+bact <- merge(bact, baseline, by = "ID")
+
+precision.r <- function(data, ids) {
+  data = data[ids, ]
+
+  TE1 <- summary(lm(proportion_y ~ trt, data = data))$coef[2]
+
+  TE2 <- summary(lm(proportion_y ~ trt + y0, data = data))$coef[2]
+
+  c(TE1, TE2)
+}
+
+
+precision.r(bact, 1:nrow(bact))
+
+
+```
+
+The precision variable does not change the estimated treatment effect.
+
+# 3
+
+```{r}
+precisionsim.r <- function ()
+{
+nsim <- 90
+set.seed(123)
+
+V <- rnorm(nsim)
+
+T <- rbinom(n = nsim, size = 1, prob = 0.5)
+
+EY <- .5 * T + T * V
+Y <- rnorm(n = nsim, mean = EY)
+dat <- cbind(V, T, Y)
+dat <- data.frame(dat)
+dat
+}
+```
+
+```{r}
+mod_without_V <- lm(Y ~ T, data = precisionsim.r())
+mod_with_V <- lm(Y ~ T + V, data = precisionsim.r())
+
+summary(mod_without_V)
+summary(mod_with_V)
+```
+
+# 4
+
+```{r}
+precisionsim.r <- function ()
+{
+nsim <- 90
+
+V <- rnorm(nsim)
+
+T <- rbinom(n = nsim, size = 1, prob = 0.5)
+
+EY <- .5 * T + T * V
+Y <- rnorm(n = nsim, mean = EY)
+dat <- cbind(V, T, Y)
+dat <- data.frame(dat)
+dat
+}
+```
+
+```{r}
+library(boot)
+
+precisionsim.r <- function() {
+  nsim <- 90
+  V <- rnorm(nsim)
+  A <- rbinom(n = nsim, size = 1, prob = .5)
+  EY <- .5 * A + A * V
+  Y <- rnorm(n = nsim, mean = EY, sd = 1)
+  dat <- data.frame(Y, A, V)
+  return(dat)
+}
+
+precision5.r <- function(data, ids) {
+  data <- data[ids,]
+  TE1 <- summary(lm(Y ~ A, data = data))$coef[2]
+  TE2 <- summary(lm(Y ~ A + V, data = data))$coef[2]
+  c(TE1, TE2)
+}
+
+bootprecision5.r <- function(trueA = .5) {
+  out.full <- boot(data = precisionsim.r(), statistic = precision5.r, R = 5)
+
+  est <- out.full$t0
+  bootSE <- apply(out.full$t, 2, sd)
+  lci <- est - 1.96 * bootSE
+  uci <- est + 1.96 * bootSE
+
+  lengths <- uci - lci
+  covers <- lci < trueA & uci > trueA
+
+  data.frame(Est = est, Lower95 = lci, Upper95 = uci, L = lengths, Coverage = covers)
+}
+
+bootprecision5.r()
+
+```
+
+```{r}
+problem5_list <- lapply(seq(1:1000), function(i) {
+  bootprecision5.r()
+})
+
+lapply(problem5_list[1:6], head)
+
+```
+
+# 5
+
+```{r}
+library(boot)
+gss <- read.csv("~/gss.csv")
+gssmed2<-gss[,c("trump","gthsedu","magthsedu","white","female","gt65","conservative","owngun")]
+gssmed2<-gssmed2[complete.cases(gssmed2),]
+mediate2<-function(data,ids)
+{
+ dat<-data[ids,]
+# Model3
+ full<-lm(owngun~white+conservative+female+gt65,data=dat)$coef
+ deffect<-full["white"]
+medeffect<-full[["conservative"]] # select the mediator-outcome coef
+# Model 1
+ total<-lm(owngun~white + female+gt65,data=dat)$coef["white"]
+#Model2
+mediator<-lm(conservative ~white +female+gt65,data=dat)$coef["white"]
+
+ productest<-mediator*medeffect
+ diffest<-total-deffect
+ c(prod.est=productest,diff.est=diffest)
+}
+bootmediation2.r<-function()
+{
+ stand.out<-boot(data=gssmed2,statistic=mediate2,R=1000)
+
+ est<-stand.out$t0
+ SE<-apply(stand.out$t, 2, sd)
+ uci<-est+1.96*SE
+ lci<-est-1.96*SE
+ # stand.lci[3]<-expit(logodds(stand.est[3])-1.96*stand.SE[4])
+ # stand.uci[3]<-expit(logodds(stand.est[3])+1.96*stand.SE[4])
+ df<-data.frame(est,lci,uci)
+ colnames(df)<-c('Est','Lower95','Upper95')
+ rownames(df)<-c('Product','Difference')
+ df<-cbind(df,rownames(df))
+ colnames(df)[ncol(df)]<-'Model'
+ df
+}
+
+bootmediation2.r()
+```
